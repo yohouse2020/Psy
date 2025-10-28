@@ -3,7 +3,7 @@ services:
     name: telegram-psychologist-bot
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: chmod +x build.sh && ./build.sh
     startCommand: python app.py
     envVars:
       - key: TELEGRAM_TOKEN
