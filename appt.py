@@ -1,12 +1,13 @@
 import os
 import logging
 import tempfile
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import speech_recognition as sr
 from gtts import gTTS
 import openai
-import io
+import requests
 
 # Настройка логирования
 logging.basicConfig(
@@ -14,12 +15,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Конфигурация
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-OPENAI_API_KEY = "YOUR_OPENAI_API_KEY"
-
-# Инициализация OpenAI
-openai.api_key = OPENAI_API_KEY
+# Конфигурация из переменных окружения
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 
 class PsychologistBot:
     def __init__(self):
@@ -44,20 +42,27 @@ class PsychologistBot:
     async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка голосовых сообщений"""
         try:
+            await update.message.reply_text("🎤 Обрабатываю ваше сообщение...")
+            
             voice = update.message.voice
             voice_file = await voice.get_file()
             
             # Скачиваем голосовое сообщение
+            voice_content = await voice_file.download_as_bytearray()
+            
+            # Сохраняем во временный файл
             with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
-                await voice_file.download_to_drive(temp_ogg.name)
+                temp_ogg.write(voice_content)
                 temp_ogg_path = temp_ogg.name
 
             # Конвертируем в WAV
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
                 temp_wav_path = temp_wav.name
 
-            # Конвертация формата
-            os.system(f'ffmpeg -i {temp_ogg_path} {temp_wav_path} -y')
+            # Конвертация формата используя pydub
+            from pydub import AudioSegment
+            audio = AudioSegment.from_ogg(temp_ogg_path)
+            audio.export(temp_wav_path, format="wav")
             
             # Распознавание речи
             text = self.speech_to_text(temp_wav_path)
@@ -75,15 +80,12 @@ class PsychologistBot:
                 # Отправляем текстовый ответ
                 await update.message.reply_text(psychologist_response)
                 
-                # Генерируем и отправляем голосовой ответ
-                await self.send_voice_response(update, psychologist_response)
-                
             else:
-                await update.message.reply_text("❌ Не удалось распознать речь. Попробуйте еще раз.")
+                await update.message.reply_text("❌ Не удалось распознать речь. Попробуйте еще раз или напишите текстом.")
 
         except Exception as e:
             logging.error(f"Error processing voice: {e}")
-            await update.message.reply_text("❌ Произошла ошибка при обработке голосового сообщения.")
+            await update.message.reply_text("❌ Произошла ошибка при обработке голосового сообщения. Попробуйте написать текстом.")
 
     def speech_to_text(self, audio_path: str) -> str:
         """Преобразование речи в текст"""
@@ -102,14 +104,20 @@ class PsychologistBot:
         """Обработка текстовых сообщений"""
         user_text = update.message.text
         
+        # Проверяем кризисные ситуации
+        if await self.check_crisis_situation(user_text):
+            await update.message.reply_text(self.get_crisis_response())
+            return
+        
         # Генерируем ответ психолога
         response = await self.generate_psychologist_response(user_text)
-        
         await update.message.reply_text(response)
 
     async def generate_psychologist_response(self, user_message: str) -> str:
         """Генерация ответа в стиле психолога с использованием OpenAI"""
         try:
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            
             prompt = f"""
 Ты - дипломированный психолог с 15-летним опытом работы. Твоя задача - оказывать профессиональную психологическую поддержку.
 
@@ -127,7 +135,7 @@ class PsychologistBot:
 Ответ психолога:
             """
             
-            response = openai.ChatCompletion.create(
+            response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "Ты - опытный психолог, оказывающий профессиональную поддержку."},
@@ -143,37 +151,40 @@ class PsychologistBot:
             logging.error(f"OpenAI error: {e}")
             return "Благодарю вас за доверие. Я внимательно вас выслушал и хочу отметить, что обращение за помощью - это важный шаг. Давайте вместе подумаем, как мы можем работать с этой ситуацией. Что вы чувствуете в данный момент?"
 
-    async def send_voice_response(self, update: Update, text: str):
-        """Преобразование текста в речь и отправка голосового сообщения"""
-        try:
-            # Ограничиваем длину текста для TTS
-            if len(text) > 1000:
-                text = text[:1000] + "..."
-            
-            # Создаем временный файл для аудио
-            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_audio:
-                # Генерируем речь с помощью gTTS
-                tts = gTTS(text=text, lang='ru', slow=False)
-                tts.save(temp_audio.name)
-                
-                # Отправляем голосовое сообщение
-                with open(temp_audio.name, 'rb') as audio_file:
-                    await update.message.reply_voice(voice=audio_file)
-                
-                # Удаляем временный файл
-                os.unlink(temp_audio.name)
-                
-        except Exception as e:
-            logging.error(f"TTS error: {e}")
-            # В случае ошибки TTS просто отправляем текстовый ответ
+    async def check_crisis_situation(self, text: str) -> bool:
+        """Проверка на кризисные ситуации"""
+        crisis_keywords = ['суицид', 'самоубийство', 'умру', 'покончить', 'кризис', 'хочу умереть']
+        text_lower = text.lower()
+        return any(keyword in text_lower for keyword in crisis_keywords)
+
+    def get_crisis_response(self) -> str:
+        """Ответ для кризисных ситуаций"""
+        return """
+🚨 Я понимаю, что вы переживаете тяжелые чувства. 
+
+Пожалуйста, обратитесь за немедленной помощью:
+• Телефон доверия: 8-800-2000-122 (круглосуточно)
+• Экстренная психологическая помощь: 112
+• Не оставайтесь один на один с проблемой
+
+Ваша жизнь бесценна, и есть люди, которые готовы помочь.
+"""
 
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик ошибок"""
         logging.error(f"Update {update} caused error {context.error}")
-        await update.message.reply_text("❌ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
+        try:
+            await update.message.reply_text("❌ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
+        except:
+            pass
 
 def main():
     """Запуск бота"""
+    # Проверяем обязательные переменные окружения
+    if not TELEGRAM_TOKEN or not OPENAI_API_KEY:
+        logging.error("Missing required environment variables: TELEGRAM_TOKEN or OPENAI_API_KEY")
+        return
+    
     # Создаем приложение
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
@@ -187,8 +198,21 @@ def main():
     application.add_error_handler(bot.error_handler)
     
     # Запускаем бота
-    print("🤖 Бот-психолог запущен...")
-    application.run_polling()
+    port = int(os.environ.get('PORT', 8443))
+    webhook_url = os.environ.get('WEBHOOK_URL')
+    
+    if webhook_url:
+        # Используем webhook для продакшена
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=TELEGRAM_TOKEN,
+            webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
+        )
+    else:
+        # Используем polling для разработки
+        print("🤖 Бот-психолог запущен в режиме polling...")
+        application.run_polling()
 
 if __name__ == '__main__':
     main()
