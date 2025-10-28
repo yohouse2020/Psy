@@ -10,3 +10,7 @@ pip install -r requirements.txt
 # Check installed packages
 echo "=== Installed Python packages ==="
 pip list
+
+# Check Python version
+echo "=== Python version ==="
+python --version
