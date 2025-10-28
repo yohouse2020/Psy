@@ -1,11 +1,10 @@
 import os
 import logging
 import tempfile
-import asyncio
+import subprocess
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import openai
-import subprocess
 
 # Настройка логирования
 logging.basicConfig(
@@ -62,7 +61,7 @@ class PsychologistBot:
                 os.unlink(ogg_path)
                 os.unlink(wav_path)
                 
-                if text and len(text.strip()) > 5:  # Проверяем что текст не пустой
+                if text and len(text.strip()) > 5:
                     update.message.reply_text(f"🎤 Я услышал: _{text}_", parse_mode='Markdown')
                     
                     # Генерируем ответ психолога
@@ -70,7 +69,7 @@ class PsychologistBot:
                     update.message.reply_text(response)
                     
                 else:
-                    update.message.reply_text("❌ Не удалось распознать речь или сообщение слишком короткое. Пожалуйста, попробуйте еще раз или напишите текстом.")
+                    update.message.reply_text("❌ Не удалось распознать речь. Попробуйте еще раз или напишите текстом.")
             else:
                 update.message.reply_text("❌ Ошибка конвертации аудио.")
                 if os.path.exists(ogg_path):
@@ -85,7 +84,6 @@ class PsychologistBot:
         try:
             wav_path = ogg_path.replace('.ogg', '.wav')
             
-            # Используем subprocess для вызова ffmpeg
             result = subprocess.run([
                 'ffmpeg', '-i', ogg_path, '-acodec', 'pcm_s16le', 
                 '-ac', '1', '-ar', '16000', wav_path, '-y'
@@ -112,11 +110,9 @@ class PsychologistBot:
             recognizer = sr.Recognizer()
             
             with sr.AudioFile(wav_path) as source:
-                # Adjust for ambient noise and record
                 recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 audio_data = recognizer.record(source)
                 
-                # Recognize using Google Speech Recognition
                 text = recognizer.recognize_google(audio_data, language='ru-RU')
                 return text
                 
@@ -204,7 +200,6 @@ class PsychologistBot:
         """Обработчик ошибок"""
         logger.error(f"Exception while handling an update: {context.error}")
         
-        # Try to send error message if possible
         try:
             if update and update.message:
                 update.message.reply_text("❌ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
@@ -222,10 +217,8 @@ def main():
         return
     
     try:
-        # Создаем updater вместо application (для v13)
+        # Создаем updater
         updater = Updater(TELEGRAM_TOKEN, use_context=True)
-        
-        # Получаем dispatcher для регистрации обработчиков
         dp = updater.dispatcher
         
         # Создаем экземпляр бота-психолога
@@ -249,7 +242,7 @@ def main():
                 url_path=TELEGRAM_TOKEN,
                 webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
             )
-            logger.info("Bot started with webhook")
+            logger.info(f"Bot started with webhook on port {port}")
         else:
             # Используем polling для разработки
             updater.start_polling()
