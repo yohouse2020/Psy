@@ -8,6 +8,7 @@ import speech_recognition as sr
 from gtts import gTTS
 import openai
 import requests
+import io
 
 # Настройка логирования
 logging.basicConfig(
@@ -30,7 +31,7 @@ class PsychologistBot:
 
 Я - ваш виртуальный психолог, готовый выслушать и помочь. Вы можете:
 • Отправлять голосовые сообщения
-• Писать текстовые сообщения
+• Писать текстовые сообщения  
 • Получать профессиональную психологическую поддержку
 
 Я соблюдаю полную конфиденциальность и этику психологической практики.
@@ -50,26 +51,16 @@ class PsychologistBot:
             # Скачиваем голосовое сообщение
             voice_content = await voice_file.download_as_bytearray()
             
-            # Сохраняем во временный файл
+            # Используем временный файл
             with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
                 temp_ogg.write(voice_content)
                 temp_ogg_path = temp_ogg.name
 
-            # Конвертируем в WAV
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-                temp_wav_path = temp_wav.name
-
-            # Конвертация формата используя pydub
-            from pydub import AudioSegment
-            audio = AudioSegment.from_ogg(temp_ogg_path)
-            audio.export(temp_wav_path, format="wav")
+            # Распознавание речи напрямую из OGG
+            text = await self.speech_to_text_ogg(temp_ogg_path)
             
-            # Распознавание речи
-            text = self.speech_to_text(temp_wav_path)
-            
-            # Очистка временных файлов
+            # Очистка временного файла
             os.unlink(temp_ogg_path)
-            os.unlink(temp_wav_path)
 
             if text:
                 await update.message.reply_text(f"🎤 Я услышал: _{text}_", parse_mode='Markdown')
@@ -87,17 +78,36 @@ class PsychologistBot:
             logging.error(f"Error processing voice: {e}")
             await update.message.reply_text("❌ Произошла ошибка при обработке голосового сообщения. Попробуйте написать текстом.")
 
-    def speech_to_text(self, audio_path: str) -> str:
-        """Преобразование речи в текст"""
+    async def speech_to_text_ogg(self, audio_path: str) -> str:
+        """Преобразование речи в текст из OGG формата"""
         try:
-            with sr.AudioFile(audio_path) as source:
+            # Используем альтернативный метод распознавания
+            import speech_recognition as sr
+            
+            # Создаем временный WAV файл без использования aifc
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                temp_wav_path = temp_wav.name
+            
+            # Конвертируем используя системный ffmpeg
+            os.system(f'ffmpeg -i "{audio_path}" "{temp_wav_path}" -y 2>/dev/null')
+            
+            with sr.AudioFile(temp_wav_path) as source:
                 audio = self.recognizer.record(source)
                 text = self.recognizer.recognize_google(audio, language='ru-RU')
-                return text
+            
+            # Очистка
+            if os.path.exists(temp_wav_path):
+                os.unlink(temp_wav_path)
+                
+            return text
+            
         except sr.UnknownValueError:
             return ""
         except sr.RequestError as e:
             logging.error(f"Speech recognition error: {e}")
+            return ""
+        except Exception as e:
+            logging.error(f"Audio processing error: {e}")
             return ""
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,7 +135,7 @@ class PsychologistBot:
 
 Твой ответ должен быть:
 1. Профессиональным и этичным
-2. Поддерживающим и эмпатичным
+2. Поддерживающим и эмпатичным  
 3. Основанным на принципах доказательной психологии
 4. Конкретным и практичным
 5. В формате терапевтического диалога
@@ -198,7 +208,7 @@ def main():
     application.add_error_handler(bot.error_handler)
     
     # Запускаем бота
-    port = int(os.environ.get('PORT', 8443))
+    port = int(os.environ.get('PORT', 10000))
     webhook_url = os.environ.get('WEBHOOK_URL')
     
     if webhook_url:
@@ -207,7 +217,8 @@ def main():
             listen="0.0.0.0",
             port=port,
             url_path=TELEGRAM_TOKEN,
-            webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
+            webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}",
+            secret_token='WEBHOOK_SECRET'
         )
     else:
         # Используем polling для разработки
