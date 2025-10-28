@@ -5,12 +5,12 @@ apt-get update
 apt-get install -y ffmpeg
 
 # Install Python dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
 
-# Check installed packages
-echo "=== Installed Python packages ==="
-pip list
-
-# Check Python version
+# Check versions
 echo "=== Python version ==="
 python --version
+
+echo "=== Installed packages ==="
+pip list
