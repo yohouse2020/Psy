@@ -5,7 +5,6 @@ import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import openai
-import requests
 import subprocess
 
 # Настройка логирования
@@ -62,7 +61,7 @@ class PsychologistBot:
                 os.unlink(ogg_path)
                 os.unlink(wav_path)
                 
-                if text:
+                if text and len(text.strip()) > 5:  # Проверяем что текст не пустой
                     await update.message.reply_text(f"🎤 Я услышал: _{text}_", parse_mode='Markdown')
                     
                     # Генерируем ответ психолога
@@ -70,7 +69,7 @@ class PsychologistBot:
                     await update.message.reply_text(response)
                     
                 else:
-                    await update.message.reply_text("❌ Не удалось распознать речь. Пожалуйста, попробуйте еще раз или напишите текстом.")
+                    await update.message.reply_text("❌ Не удалось распознать речь или сообщение слишком короткое. Пожалуйста, попробуйте еще раз или напишите текстом.")
             else:
                 await update.message.reply_text("❌ Ошибка конвертации аудио.")
                 if os.path.exists(ogg_path):
@@ -89,7 +88,7 @@ class PsychologistBot:
             result = subprocess.run([
                 'ffmpeg', '-i', ogg_path, '-acodec', 'pcm_s16le', 
                 '-ac', '1', '-ar', '16000', wav_path, '-y'
-            ], capture_output=True, text=True)
+            ], capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0 and os.path.exists(wav_path):
                 return wav_path
@@ -97,6 +96,9 @@ class PsychologistBot:
                 logging.error(f"FFmpeg error: {result.stderr}")
                 return None
                 
+        except subprocess.TimeoutExpired:
+            logging.error("FFmpeg timeout")
+            return None
         except Exception as e:
             logging.error(f"Conversion error: {e}")
             return None
@@ -111,7 +113,7 @@ class PsychologistBot:
             
             with sr.AudioFile(wav_path) as source:
                 # Adjust for ambient noise and record
-                recognizer.adjust_for_ambient_noise(source)
+                recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 audio_data = recognizer.record(source)
                 
                 # Recognize using Google Speech Recognition
@@ -198,50 +200,61 @@ class PsychologistBot:
 Не оставайтесь один на один с проблемой. Ваша жизнь бесценна.
 """
 
-    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик ошибок"""
-        logging.error(f"Update {update} caused error {context.error}")
+        logging.error(f"Exception while handling an update: {context.error}")
+        
+        # Try to send error message if possible
         try:
-            await update.message.reply_text("❌ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
+            if isinstance(update, Update) and update.message:
+                await update.message.reply_text("❌ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
         except:
             pass
 
 def main():
     """Запуск бота"""
     # Проверяем обязательные переменные окружения
-    if not TELEGRAM_TOKEN or not OPENAI_API_KEY:
-        logging.error("Missing required environment variables: TELEGRAM_TOKEN or OPENAI_API_KEY")
+    if not TELEGRAM_TOKEN:
+        logging.error("Missing TELEGRAM_TOKEN environment variable")
+        return
+    if not OPENAI_API_KEY:
+        logging.error("Missing OPENAI_API_KEY environment variable")
         return
     
-    # Создаем приложение
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # Создаем экземпляр бота-психолога
-    bot = PsychologistBot()
-    
-    # Добавляем обработчики
-    application.add_handler(CommandHandler("start", bot.start))
-    application.add_handler(MessageHandler(filters.VOICE, bot.handle_voice))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_text))
-    application.add_error_handler(bot.error_handler)
-    
-    # Запускаем бота
-    port = int(os.environ.get('PORT', 10000))
-    webhook_url = os.environ.get('WEBHOOK_URL')
-    
-    if webhook_url:
-        # Используем webhook для продакшена
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=TELEGRAM_TOKEN,
-            webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
-        )
-        logging.info("Bot started with webhook")
-    else:
-        # Используем polling для разработки
-        application.run_polling()
-        logging.info("Bot started with polling")
+    try:
+        # Создаем приложение
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        
+        # Создаем экземпляр бота-психолога
+        bot = PsychologistBot()
+        
+        # Добавляем обработчики
+        application.add_handler(CommandHandler("start", bot.start))
+        application.add_handler(MessageHandler(filters.VOICE, bot.handle_voice))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_text))
+        application.add_error_handler(bot.error_handler)
+        
+        # Запускаем бота
+        port = int(os.environ.get('PORT', 10000))
+        webhook_url = os.environ.get('WEBHOOK_URL')
+        
+        if webhook_url:
+            # Используем webhook для продакшена
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path=TELEGRAM_TOKEN,
+                webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
+            )
+            logging.info("Bot started with webhook")
+        else:
+            # Используем polling для разработки
+            logging.info("Bot starting with polling...")
+            application.run_polling()
+            
+    except Exception as e:
+        logging.error(f"Failed to start bot: {e}")
+        raise
 
 if __name__ == '__main__':
     main()
