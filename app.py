@@ -2,6 +2,7 @@ import os
 import logging
 import tempfile
 import subprocess
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import openai
@@ -84,10 +85,15 @@ class PsychologistBot:
         try:
             wav_path = ogg_path.replace('.ogg', '.wav')
             
-            result = subprocess.run([
-                'ffmpeg', '-i', ogg_path, '-acodec', 'pcm_s16le', 
-                '-ac', '1', '-ar', '16000', wav_path, '-y'
-            ], capture_output=True, text=True, timeout=30)
+            # Запускаем subprocess в отдельном потоке чтобы не блокировать event loop
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, 
+                lambda: subprocess.run([
+                    'ffmpeg', '-i', ogg_path, '-acodec', 'pcm_s16le', 
+                    '-ac', '1', '-ar', '16000', wav_path, '-y'
+                ], capture_output=True, text=True, timeout=30)
+            )
             
             if result.returncode == 0 and os.path.exists(wav_path):
                 return wav_path
@@ -196,17 +202,17 @@ class PsychologistBot:
 Не оставайтесь один на один с проблемой. Ваша жизнь бесценна.
 """
 
-    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик ошибок"""
         logger.error(f"Exception while handling an update: {context.error}")
         
         try:
-            if update and update.message:
+            if isinstance(update, Update) and update.message:
                 await update.message.reply_text("❌ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
         except:
             pass
 
-def main():
+async def main():
     """Запуск бота"""
     # Проверяем обязательные переменные окружения
     if not TELEGRAM_TOKEN:
@@ -217,7 +223,7 @@ def main():
         return
     
     try:
-        # Создаем Application вместо Updater (для версии 20.x)
+        # Создаем Application
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
         # Создаем экземпляр бота-психолога
@@ -252,5 +258,4 @@ def main():
         raise
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())
