@@ -2,9 +2,8 @@ import os
 import logging
 import tempfile
 import subprocess
-import asyncio
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import openai
 
 # Настройка логирования
@@ -22,7 +21,7 @@ class PsychologistBot:
     def __init__(self):
         pass
         
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def start(self, update: Update, context: CallbackContext):
         """Обработчик команды /start"""
         welcome_text = """
 👋 Добро пожаловать в кабинет психологической помощи!
@@ -36,64 +35,59 @@ class PsychologistBot:
 
 Расскажите, что вас беспокоит...
         """
-        await update.message.reply_text(welcome_text)
+        update.message.reply_text(welcome_text)
 
-    async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def handle_voice(self, update: Update, context: CallbackContext):
         """Обработка голосовых сообщений"""
         try:
-            await update.message.reply_text("🎤 Обрабатываю ваше сообщение...")
+            update.message.reply_text("🎤 Обрабатываю ваше сообщение...")
             
             voice = update.message.voice
-            voice_file = await voice.get_file()
+            voice_file = voice.get_file()
             
             # Скачиваем голосовое сообщение
             with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
-                await voice_file.download_to_drive(temp_ogg.name)
+                voice_file.download_to_drive(temp_ogg.name)
                 ogg_path = temp_ogg.name
 
             # Конвертируем в WAV
-            wav_path = await self.convert_ogg_to_wav(ogg_path)
+            wav_path = self.convert_ogg_to_wav(ogg_path)
             
             if wav_path:
                 # Распознаем речь
-                text = await self.speech_to_text(wav_path)
+                text = self.speech_to_text(wav_path)
                 
                 # Удаляем временные файлы
                 os.unlink(ogg_path)
                 os.unlink(wav_path)
                 
                 if text and len(text.strip()) > 5:
-                    await update.message.reply_text(f"🎤 Я услышал: _{text}_", parse_mode='Markdown')
+                    update.message.reply_text(f"🎤 Я услышал: _{text}_", parse_mode='Markdown')
                     
                     # Генерируем ответ психолога
-                    response = await self.generate_psychologist_response(text)
-                    await update.message.reply_text(response)
+                    response = self.generate_psychologist_response(text)
+                    update.message.reply_text(response)
                     
                 else:
-                    await update.message.reply_text("❌ Не удалось распознать речь. Попробуйте еще раз или напишите текстом.")
+                    update.message.reply_text("❌ Не удалось распознать речь. Попробуйте еще раз или напишите текстом.")
             else:
-                await update.message.reply_text("❌ Ошибка конвертации аудио.")
+                update.message.reply_text("❌ Ошибка конвертации аудио.")
                 if os.path.exists(ogg_path):
                     os.unlink(ogg_path)
 
         except Exception as e:
             logger.error(f"Error processing voice: {e}")
-            await update.message.reply_text("❌ Ошибка обработки голосового сообщения. Попробуйте написать текстом.")
+            update.message.reply_text("❌ Ошибка обработки голосового сообщения. Попробуйте написать текстом.")
 
-    async def convert_ogg_to_wav(self, ogg_path: str) -> str:
+    def convert_ogg_to_wav(self, ogg_path: str) -> str:
         """Конвертация OGG в WAV используя ffmpeg"""
         try:
             wav_path = ogg_path.replace('.ogg', '.wav')
             
-            # Запускаем subprocess в отдельном потоке
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, 
-                lambda: subprocess.run([
-                    'ffmpeg', '-i', ogg_path, '-acodec', 'pcm_s16le', 
-                    '-ac', '1', '-ar', '16000', wav_path, '-y'
-                ], capture_output=True, text=True, timeout=30)
-            )
+            result = subprocess.run([
+                'ffmpeg', '-i', ogg_path, '-acodec', 'pcm_s16le', 
+                '-ac', '1', '-ar', '16000', wav_path, '-y'
+            ], capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0 and os.path.exists(wav_path):
                 return wav_path
@@ -108,7 +102,7 @@ class PsychologistBot:
             logger.error(f"Conversion error: {e}")
             return None
 
-    async def speech_to_text(self, wav_path: str) -> str:
+    def speech_to_text(self, wav_path: str) -> str:
         """Распознавание речи используя Google Speech Recognition"""
         try:
             import speech_recognition as sr
@@ -132,20 +126,20 @@ class PsychologistBot:
             logger.error(f"Speech recognition error: {e}")
             return ""
 
-    async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def handle_text(self, update: Update, context: CallbackContext):
         """Обработка текстовых сообщений"""
         user_text = update.message.text
         
         # Проверяем кризисные ситуации
-        if await self.check_crisis_situation(user_text):
-            await update.message.reply_text(self.get_crisis_response())
+        if self.check_crisis_situation(user_text):
+            update.message.reply_text(self.get_crisis_response())
             return
         
         # Генерируем ответ психолога
-        response = await self.generate_psychologist_response(user_text)
-        await update.message.reply_text(response)
+        response = self.generate_psychologist_response(user_text)
+        update.message.reply_text(response)
 
-    async def generate_psychologist_response(self, user_message: str) -> str:
+    def generate_psychologist_response(self, user_message: str) -> str:
         """Генерация ответа психолога"""
         try:
             client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -183,7 +177,7 @@ class PsychologistBot:
             logger.error(f"OpenAI error: {e}")
             return "Благодарю вас за доверие. Я внимательно вас выслушал и хочу отметить, что обращение за помощью - это важный шаг. Давайте вместе подумаем, как мы можем работать с этой ситуацией."
 
-    async def check_crisis_situation(self, text: str) -> bool:
+    def check_crisis_situation(self, text: str) -> bool:
         """Проверка на кризисные ситуации"""
         crisis_keywords = ['суицид', 'самоубийство', 'умру', 'покончить', 'кризис', 'хочу умереть', 'наложу на себя руки']
         text_lower = text.lower()
@@ -202,17 +196,17 @@ class PsychologistBot:
 Не оставайтесь один на один с проблемой. Ваша жизнь бесценна.
 """
 
-    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+    def error_handler(self, update: Update, context: CallbackContext):
         """Обработчик ошибок"""
         logger.error(f"Exception while handling an update: {context.error}")
         
         try:
-            if isinstance(update, Update) and update.message:
-                await update.message.reply_text("❌ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
+            if update and update.message:
+                update.message.reply_text("❌ Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
         except:
             pass
 
-async def main():
+def main():
     """Запуск бота"""
     # Проверяем обязательные переменные окружения
     if not TELEGRAM_TOKEN:
@@ -223,17 +217,20 @@ async def main():
         return
     
     try:
-        # Создаем Application
-        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        # Создаем Updater (для версии 13.x)
+        updater = Updater(TELEGRAM_TOKEN, use_context=True)
+        
+        # Получаем dispatcher для регистрации обработчиков
+        dp = updater.dispatcher
         
         # Создаем экземпляр бота-психолога
         bot = PsychologistBot()
         
         # Добавляем обработчики
-        application.add_handler(CommandHandler("start", bot.start))
-        application.add_handler(MessageHandler(filters.VOICE, bot.handle_voice))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_text))
-        application.add_error_handler(bot.error_handler)
+        dp.add_handler(CommandHandler("start", bot.start))
+        dp.add_handler(MessageHandler(Filters.voice, bot.handle_voice))
+        dp.add_handler(MessageHandler(Filters.text & ~Filters.command, bot.handle_text))
+        dp.add_error_handler(bot.error_handler)
         
         # Запускаем бота
         port = int(os.environ.get('PORT', 8443))
@@ -241,7 +238,7 @@ async def main():
         
         if webhook_url:
             # Используем webhook для продакшена
-            await application.run_webhook(
+            updater.start_webhook(
                 listen="0.0.0.0",
                 port=port,
                 url_path=TELEGRAM_TOKEN,
@@ -250,12 +247,15 @@ async def main():
             logger.info(f"Bot started with webhook on port {port}")
         else:
             # Используем polling для разработки
-            await application.run_polling()
+            updater.start_polling()
             logger.info("Bot started with polling")
+        
+        # Запускаем бота до остановки
+        updater.idle()
             
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         raise
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
