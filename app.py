@@ -85,7 +85,7 @@ class PsychologistBot:
         try:
             wav_path = ogg_path.replace('.ogg', '.wav')
             
-            # Запускаем subprocess в отдельном потоке чтобы не блокировать event loop
+            # Запускаем subprocess в отдельном потоке
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None, 
